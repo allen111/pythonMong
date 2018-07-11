@@ -44,17 +44,10 @@ def printDetailItem(itemName):
 	for k,v in item.items():
 		print(k+": "+str(v))
 	
-# printDetailItem("old sword")
-roomNames=[]
-def listRooms():
-	for room in rooms.find():
-		roomNames.append(room.get("name"))
-		print(room.get("name"))
-	print("\n**--**--**\n")
-		
+	
 
 roomMap=[[]]
-oldTile=8
+oldTile=7
 
 def printActiveRoom():
 	for x in roomMap:
@@ -66,61 +59,130 @@ def updateMap(): #da fare all load e prima e dopo il movimento
 	oldTile,roomMap[y][x]=roomMap[y][x],oldTile
 
 
-def describeRoom(roomName): #diventera' initializeRoom()
 
-	# rooms=db.rooms
-	m_Room_query={
-		"name":roomName
+def doorPosition(doorLoc,roomSize):
+	pos={
+	"nord":(roomSize//2,0),
+	"sud":(roomSize//2,roomSize-1),
+	"est":(roomSize-1,roomSize//2),
+	"ovest":(0,roomSize//2),
+
 	}
-	m_Room=rooms.find_one(m_Room_query)
+	return pos[doorLoc]
 
-	#print("\n"+m_Room.get("name"))
-	size=m_Room.get("size")
+
+def isTaken(item):
+	
+
+	for it in player["inventory"]:
+		if it["id_spawn"]==item["id_spawn"]:
+			return True
+
+	return False
+
+
+doorList={}
+def initializeRoom():
+	global activeRoom
+	
+	size=activeRoom.get("size")
 	w,h=size, size
 	global roomMap
 	roomMap=[[0 for x in range(w)] for y in range(h)]
-	
 
-	for item in m_Room.get("items"):
-		itemId=item.get("item_id")
-		quer={"_id":itemId}
-		res=items.find_one(quer)
-		#print(res.get("name")+": "+res.get("desc")+".")
-		#print(item.get("x"),item.get("y"))
-		roomMap[item.get("x")][item.get("y")]=1
+	for item in activeRoom.get("items"):
+		if not isTaken(item):
+			roomMap[item.get("x")][item.get("y")]=1
 
+	for door in activeRoom.get("doors"):
+		nextRoomId=door.get(door.keys()[0])
+		roomName=door.keys()[0]
+		nextRoom=rooms.find_one(nextRoomId)
+		if nextRoom is not None:
+			roomX,roomY=doorPosition(roomName,activeRoom.get("size"))
+			print(roomX,roomY)
+			roomMap[roomY][roomX]=2
+			global doorList
 
-		
-
-	# for door in m_Room.get("doors"):
-
-	# 	nextRoomId=door.get(door.keys()[0])
-	# 	roomName=door.keys()[0]
-	# 	nextRoom=rooms.find_one(nextRoomId)
-	# 	if nextRoom is not None:
-	# 		print(roomName+": "+nextRoom.get("name"))
-	# 	else:
-	# 		print(roomName+": locked")
-		
-
-# listRooms()
-# for r in roomNames:
-# 	describeRoom(r)
-	
-
-#print(player)
-
-activeRoom=rooms.find_one({"name":"ingresso"})
-describeRoom("ingresso")
+		else:
+			roomX,roomY=doorPosition(roomName,activeRoom.get("size"))
+			roomMap[roomY][roomX]=3
 
 
+def openPort(x,y):
+	global activeRoom
+	global oldTile
+	roomSize=activeRoom["size"]
+	pos={
+		(roomSize//2,0):"nord",
+		(roomSize//2,roomSize-1):"sud",
+		(roomSize-1,roomSize//2):"est",
+		(0,roomSize//2):"ovest",
+	}
+	nextRoomName=pos.get((x,y))
+	doorsList=activeRoom["doors"]
+	matches=[obj for obj in doorsList if (obj.keys()[0]==nextRoomName)]
+	if matches:
+		door=matches.pop()
+		doorid=door.get(nextRoomName)
+		activeRoom=rooms.find_one({"_id":doorid})
+		initializeRoom()
+		oldTile=7
+		reverse={
+			"nord":"sud",
+			"sud":"nord",
+			"est":"ovest",
+			"ovest":"est",
+		}
+		newDoor=reverse[nextRoomName]
+		newX,newY=doorPosition(newDoor,activeRoom["size"])
+		player.update({"x":newX})
+		player.update({"y":newY})
+		player.update({"room":activeRoom["name"]})
+		updateMap()
+		printActiveRoom()
 
-# for k,v in player.items():
-# 	print(k,v)
+
+def getItem(x,y):
+	global activeRoom
+	global oldTile
+	if oldTile==2:
+		openPort(x,y)
+	else:
+		res=activeRoom.get("items")
+		matches = [obj for obj in res if (obj.get("y")==x and obj.get("x")==y)]
+		if matches and oldTile!=0:
+			itemOnFloor=matches.pop()
+			activeRoom["items"].remove(itemOnFloor)
+			itemOnFloorId=itemOnFloor.get("item_id")
+			itemName=items.find_one({"_id":itemOnFloorId})["name"]
+			itemDict={
+				"name":itemName,
+				"id":itemOnFloorId,
+            	"id_spawn":itemOnFloor.get("id_spawn")
+
+			}
+			player["inventory"].append(itemDict)
+			printInventory()
+			oldTile=0
+
+
+def printInventory():
+	if not player["inventory"]:
+		print("il tuo zaino e' vuoto")
+	else:
+		for item in player["inventory"]:
+			itemId=item["id"]
+			tmpItem=items.find_one({"_id":itemId})
+			print(tmpItem["name"]+": "+tmpItem["desc"])
+
+
+
+
 
 def exitWithoutSave():
 	exit(0)
-def savePlayerState():
+def savePlayerState(): 
 	state=player
 	state.pop("_id")
 	newSave=state.get("save_id")
@@ -130,6 +192,12 @@ def savePlayerState():
 	print("goodbye")
 	exit(0)
 
+def loadState(): 
+	p= playerst.find().sort("save_id",pymongo.DESCENDING).limit(1)[0]
+	x,y=p.get("x"),p.get("y")
+	global activeRoom
+	activeRoom=rooms.find_one({"name":p["room"]})
+	return p
 
 
 def checkRoomPosition(x,y,m_activeRoom):
@@ -167,6 +235,8 @@ inpt={
 	"a":"ovest",
 	"q":"quit",
 	"x":"close",
+	"e":"use",
+	"i":"listInventory",
 	"none":"none",
 }
 
@@ -182,26 +252,28 @@ def manageInput(command):
 	"ovest":[movePlayerNew,(x-1,y,activeRoom)],
 	"quit":[savePlayerState,()],
 	"close":[exitWithoutSave,()],
+	"use":[getItem,(x,y)],
+	"listInventory":[printInventory,()],
 	"none":[error11,()]
 
 	}
-	print("Called: "+fun[command][0].__name__)
+	print("Called: "+str(fun[command][0].__name__)) #DEBUG
 	fun[command][0](*fun[command][1])
 
 
 
 
-def loadState():
-	p= playerst.find().sort("save_id",pymongo.DESCENDING).limit(1)[0]
-	x,y=p.get("x"),p.get("y")
-	return p
+
 	
 
 	
+activeRoomName="ingresso"
+activeRoom=rooms.find_one({"name":activeRoomName})
 
 
 player=loadState()
-print(player)
+print(player) #DEBUG
+initializeRoom()
 updateMap()
 printActiveRoom()
 while True:
